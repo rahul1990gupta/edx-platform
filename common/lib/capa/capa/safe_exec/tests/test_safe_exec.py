@@ -12,6 +12,8 @@ import random2 as random
 import six
 from codejail.jail_code import is_configured
 from codejail.safe_exec import SafeExecException
+from django.test import override_settings, TestCase as DjangoTestCase
+from django.conf import settings
 from six import text_type, unichr
 from six.moves import range
 
@@ -92,6 +94,69 @@ class TestSafeOrNot(unittest.TestCase):
         g = {}
         safe_exec("import os; files = os.listdir('/')", g, unsafely=True)
         self.assertEqual(g['files'], os.listdir('/'))
+
+
+class TestLimitConfiguration(DjangoTestCase):
+    """
+    Test that resource limits can be configured and overriden via Django settings.
+
+    More comprehensive testing of all the limits is done within the codejail package itself.
+    """
+
+    # We need the codejail configuration middle for this test suite.
+    test_middleware = getattr(settings, 'MIDDLWARE', []).copy()
+    test_middleware.append('codejail.django_integration.ConfigureCodeJailMiddleware')
+
+    # Let's tweak the codejail settings...
+    test_codejail_settings = getattr(settings, 'CODE_JAIL', {'limits': {}}).copy()
+
+    # We set an 8 MB max virtual memory usage for code executing in codejail...
+    test_codejail_settings['limits']['VMEM'] = (
+        8 * 1000 * 1000
+    )
+
+    # except for a special course, whose limit is bumped up to 12 MB.
+    test_codejail_settings['limit_overrides'] = {
+        'course-v1:my+special+course': {
+            'VMEM': 12 * 1000 * 1000
+        },
+    }
+
+    @override_settings(MIDDLEWARE=test_middleware, CODE_JAIL=test_codejail_settings)
+    def test_configuring_and_overriding_limits(self):
+
+        # Can't test for forbiddenness if CodeJail isn't configured for python.
+        if not is_configured("python"):
+            pytest.skip()
+        g = {}
+
+        # Untrusted code can make a 4 MB object...
+        safe_exec(
+            code="x = bytearray(4 * 1000 * 1000)", 
+            globals_dict={},
+        )
+
+        # ...but 10 MB is too big.
+        with self.assertRaises(SafeExecException):
+            safe_exec(
+                code="x = bytearray(10 * 1000 * 1000)",
+                globals_dict={},
+            )
+
+        # However, 10 MB is fine for untrusted code in the special course....
+        safe_exec(
+            code="x = bytearray(10 * 1000 * 1000)",
+            globals_dict={},
+            limit_overrides_context="course-v1:my+special+course",
+        )
+
+        # ... but 14 MB is always too big.
+        with self.assertRaises(SafeExecException):
+            safe_exec(
+                code="x = bytearray(14 * 1000 * 1000)",
+                globals_dict={},
+                limit_overrides_context="course-v1:my+special+course",
+            )
 
 
 class DictCache(object):
