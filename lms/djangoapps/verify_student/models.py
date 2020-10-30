@@ -668,6 +668,22 @@ class SoftwareSecurePhotoVerification(PhotoVerification):
         ).exclude(photo_id_key='')
 
         return init_verification.latest('created_at') if init_verification.exists() else None
+    
+    def expiration_datetime(self):
+        """
+        Datetime that the verification will expire.
+
+        The datetime returned should be the one generated when the Software
+        Secure photo verification has been approved, which can take several
+        days from the time of creation.
+
+        TO-DO: If the verification has not been approved, should this return
+        `None` instead of defaulting to the original method of calculating
+        the date 365 days from creation?
+        """
+        if self.expiry_date:
+            return self.expiry_date
+        return super(SoftwareSecurePhotoVerification, self).expiration_datetime()
 
     @status_before_must_be("created")
     def upload_face_image(self, img_data):
